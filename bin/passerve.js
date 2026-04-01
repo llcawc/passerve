@@ -1,2 +1,2 @@
 #!/usr/bin/env node
-import '../lib/pass.js'
+import '../dist/comm.js'

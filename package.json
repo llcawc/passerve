@@ -1,51 +1,65 @@
 {
   "name": "passerve",
-  "version": "1.1.6",
-  "date": "25.01.13",
-  "type": "module",
-  "main": "./lib/index.js",
-  "exports": "./lib/index.js",
+  "version": "1.1.7",
+  "description": "Simple static server for local development",
+  "keywords": [
+    "express",
+    "frontend",
+    "local",
+    "server"
+  ],
+  "homepage": "https://github.com/llcawc/passerve",
+  "license": "MIT",
+  "author": "llcawc",
   "bin": {
     "passerve": "bin/passerve.js"
   },
-  "author": "llcawc",
-  "license": "MIT",
-  "homepage": "https://github.com/llcawc/passerve",
-  "description": "Simple static server for local development",
-  "keywords": [
-    "local",
-    "server",
-    "frontend",
-    "express"
+  "files": [
+    "bin",
+    "dist",
+    "package.json",
+    "LICENSE",
+    "README.md"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/llcawc/passerve.git"
+  "type": "module",
+  "main": "./dist/server.cjs",
+  "module": "./dist/server.js",
+  "types": "./dist/server.d.cts",
+  "exports": {
+    ".": {
+      "import": "./dist/server.js",
+      "require": "./dist/server.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node dist/comm",
+    "lint": "oxlint",
+    "fix": "oxlint --fix",
+    "check": "oxfmt --check",
+    "fmt": "oxfmt",
+    "validate": "oxlint && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "tsc": "tsc src/comm.ts --ignoreConfig --outDir dist",
+    "dev": "tsdown --watch",
+    "build": "tsdown && pnpm tsc"
+  },
+  "dependencies": {
+    "colors": "^1.4.0",
+    "commander": "^14.0.3",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@typescript/native-preview": "7.0.0-dev.20260401.1",
+    "oxfmt": "^0.43.0",
+    "oxlint": "^1.58.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.2"
   },
   "engines": {
     "node": ">= 16.0.0"
   },
-  "scripts": {
-    "lint": "eslint ./lib",
-    "lint:fix": "eslint ./lib --fix",
-    "test": "npx .",
-    "build": "node ./lib/getver.js && tsc"
-  },
-  "dependencies": {
-    "colors": "^1.4.0",
-    "commander": "^13.0.0",
-    "express": "^4.21.2"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.18.0",
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.10.5",
-    "eslint": "^9.18.0",
-    "globals": "^15.14.0",
-    "prettier": "^3.4.2",
-    "prettier-plugin-embed": "^0.4.15",
-    "prettier-plugin-organize-imports": "^4.1.0",
-    "typescript": "^5.7.3",
-    "typescript-eslint": "^8.19.1"
-  }
+  "date": "26.04.01"
 }
