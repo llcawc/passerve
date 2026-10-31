@@ -1,21 +1,21 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["dist/**", "node_modules/**", "tests/**"],
+  "ignorePatterns": ["bin/**", "dist/**", "node_modules/**", "test/**", "app/**"],
   "tabWidth": 2,
   "useTabs": false,
   "endOfLine": "lf",
   "printWidth": 120,
   "overrides": [
     {
-      "files": ["**/*.{js,jsx,ts,tsx}"],
+      "files": ["**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}"],
       "options": {
         "semi": false,
         "singleQuote": true,
         "trailingComma": "all",
         "bracketSpacing": true,
-        "internalPattern": ["@/", "~/"],
         "sortImports": {
-          "groups": ["type", "builtin", "external", "internal", ["parent", "sibling", "index"], "style", "unknown"]
+          "groups": ["type", "builtin", "external", "internal", ["parent", "sibling", "index"], "style", "unknown"],
+          "internalPattern": ["@/", "~/"]
         }
       }
     }

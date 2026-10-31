@@ -66,43 +66,68 @@ or
 $ npx passerve --port 8080 --dist './static'
 ```
 
-If you do not specify the data on the command line, the default settings will be applied. And if the file "404.html " missing, the error page will be displayed as one simple internal page.
+If no options are provided, defaults are used. If the 404.html file missing in the dist folder, a built-in error page is shown instead.
+
+> Tip: --port 0 makes the OS pick any free port. The actual port is printed in the startup log.
 
 ## API / Gulp
 
-You can programmatically start the local server if you import the server() function from the passerve package:
+You can start the server programmatically. The `server()` function returns a `Promise<http.Server>` that resolves **after** the server is listening and rejects if the port is invalid, already in use, or if `e404` points outside `dist`.
 
 ```js
 // gulpfile.js
 
-import gulp from "gulp";
-const { src, dest, series, parallel, watch } = gulp;
+import { src, dest, series, parallel, watch } from "gulp";
 import server from "passerve";
 
-function browse() {
-  server({
-    port: 3000, // server port number (default: 3000)
-    dist: "dist", // folder for serve files (default: dist)
-    e404: "404.html", // filename for page "Error 404" (default: 404.html)
+async function browse() {
+  const httpServer = await server({
+    port: 3000, // default: 3000; use 0 to get any free port
+    dist: "dist", // default: "dist", resolved from process.cwd()
+    e404: "404.html", // default: "404.html", must be inside `dist`
   });
+
+  // Log the actual port — useful when `port: 0` was used
+  const { port } = httpServer.address();
+  console.log(`Server is running on http://localhost:${port}/`);
+
+  // Optional: stop the server on Ctrl+C / process exit
+  const shutdown = () => httpServer.close(() => process.exit(0));
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+
+  // Keep the task alive until the server closes
+  await new Promise((resolve) => httpServer.once("close", resolve));
 }
 
 function copy() {
   return src("src/**/*.*").pipe(dest("dist"));
 }
 
-function watchdev() {
+function watcher() {
   watch("src/**/*.*", copy);
 }
 
-export let serve = parallel(watchdev, browse);
-export let dev = series(copy, serve);
+export const serve = parallel(watcher, browse);
+export const dev = series(copy, serve);
 ```
 
-The best way to apply this can be found in the gulp project assignment.
+## Closing the server
+
+`server.close()` follows Node.js semantics: it stops accepting new connections and waits for the existing ones to finish.
+
+```js
+import server from "passerve";
+
+const httpServer = await server({ port: 0, dist: "dist" });
+
+// ... run tests against httpServer.address().port ...
+
+await new Promise((resolve, reject) => httpServer.close((err) => (err ? reject(err) : resolve())));
+```
 
 ---
 
 ## License
 
-MIT ©2024 pasmurno by [llcawc](https://github.com/llcawc). Made with <span style="color: rgb(230 15 10);">❤</span> to beautiful architecture
+MIT ©2026 pasmurno by [llcawc](https://github.com/llcawc). Made with <span style="color: red;">❤</span> to beautiful architecture

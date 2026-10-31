@@ -7,12 +7,7 @@ export default defineConfig({
       fixedExtension: false,
       target: ['esnext'],
     },
-    cjs: {
-      target: ['node16'],
-    },
   },
-  dts: {
-    tsgo: true,
-  },
+  dts: true,
   exports: true,
 })

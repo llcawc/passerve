@@ -1,28 +1,19 @@
 # Node & project folders
 /.git/
+/.osp/
 /node_modules/
-/**/debug.log
-/**/yarn.lock
-/**/package-lock.json
+
+# Config files
+/**/.env
+/**/.env.*.php
+/**/.env.php
 
 # archive package
 /**/*.zip
 /**/*.7z
 
-# iMac cash files
+# iMac & Windows
 /**/*.DS_Store
-
-# Windows thumbnail cache files
 /**/Thumbs.db
-/**/Thumbs.db:encryptable
-/**/ehthumbs.db
-/**/ehthumbs_vista.db
-
-# Dump file
-/**/*.stackdump
-
-# Folder config file
 /**/[Dd]esktop.ini
-
-# Windows shortcuts
 /**/*.lnk
