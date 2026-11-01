@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
-import http from "node:http";
-import { join, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { cwd } from "node:process";
-import chalk from "chalk";
-import express from "express";
+import { styleText } from "node:util";
+import { H3, HTTPError, serve, serveStatic } from "h3";
 // src/error.ts
 const content = `<!DOCTYPE html>
 <html lang="en">
@@ -61,73 +60,71 @@ const content = `<!DOCTYPE html>
 </html>
 `;
 // src/server.ts
-const base = cwd();
-const PORT_MIN = 0;
-const PORT_MAX = 65535;
-const STATIC_SERVER_NAME = "passerve";
 const DEFAULTS = {
 	port: 3e3,
-	dist: join(base, "dist"),
+	dist: join(cwd(), "dist"),
 	e404: "404.html"
 };
+const STATIC_SERVER_NAME = "passerve";
 function isValidPort(port) {
-	return Number.isInteger(port) && port >= PORT_MIN && port <= PORT_MAX;
+	return Number.isInteger(port) && port >= 0 && port <= 65535;
 }
-/**
-* Creating a static file server
-* @param args - Optional parameters: server port, source file folder and file name for error 404
-* @type type Args = { port: number; dist: string; e404: string }
-* @returns The HTTP server instance; the promise resolves once the server is listening
-*/
+function isInside(root, path) {
+	const rel = relative(root, path);
+	return rel === "" || rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
 async function server(args = {}) {
 	const port = args.port ?? DEFAULTS.port;
 	const distAbs = resolve(args.dist ?? DEFAULTS.dist);
-	const e404Name = args.e404 ?? DEFAULTS.e404;
+	const e404Path = resolve(distAbs, args.e404 ?? DEFAULTS.e404);
 	if (!isValidPort(port)) throw new RangeError(`Invalid port ${port}: expected an integer from 0 to 65535.`);
-	let errorFilePath = resolve(distAbs, e404Name);
-	if (!errorFilePath.startsWith(distAbs + sep)) throw new Error("Custom \"Error 404\" file must be inside dist folder");
-	let hasE404 = false;
-	try {
-		hasE404 = (await fs.stat(errorFilePath)).isFile();
-	} catch {
-		errorFilePath = null;
-	}
-	const app = express();
-	app.use((_req, res, next) => {
-		res.header("Access-Control-Allow-Origin", "*");
-		res.header("Access-Control-Expose-Headers", "Content-Length");
-		res.header("Access-Control-Allow-Headers", "range");
-		res.header("X-Served-Static-By", STATIC_SERVER_NAME);
-		next();
+	if (!isInside(distAbs, e404Path)) throw new Error("Custom \"Error 404\" file must be inside dist folder");
+	const errorFilePath = await fs.stat(e404Path).then((stat) => stat.isFile() ? e404Path : null).catch(() => null);
+	const app = new H3();
+	app.use((event, next) => {
+		event.res.headers.set("Access-Control-Allow-Origin", "*");
+		event.res.headers.set("Access-Control-Expose-Headers", "Content-Length");
+		event.res.headers.set("Access-Control-Allow-Headers", "range");
+		event.res.headers.set("X-Served-Static-By", STATIC_SERVER_NAME);
+		return next();
 	});
-	app.use(express.static(distAbs));
-	app.use((_req, res) => {
-		if (hasE404 && errorFilePath) res.status(404).sendFile(errorFilePath, (err) => {
-			if (err) {
-				console.error("404 file error:", err);
-				res.status(500).send("Error loading 404 page");
-			}
+	app.all("/**", async (event) => {
+		try {
+			const response = await serveStatic(event, {
+				indexNames: ["/index.html"],
+				getContents: (id) => {
+					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
+					if (!isInside(distAbs, path)) return;
+					return fs.readFile(path).catch(() => void 0);
+				},
+				getMeta: async (id) => {
+					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
+					if (!isInside(distAbs, path)) return;
+					const stat = await fs.stat(path).catch(() => null);
+					if (!stat?.isFile()) return;
+					return {
+						size: stat.size,
+						mtime: stat.mtimeMs
+					};
+				}
+			});
+			if (response) return response;
+		} catch (error) {
+			if (!HTTPError.isError(error) || error.status !== 404) throw error;
+		}
+		let body = String(content);
+		if (errorFilePath) try {
+			body = await fs.readFile(errorFilePath, "utf8");
+		} catch {}
+		return new Response(event.req.method === "HEAD" ? null : body, {
+			status: 404,
+			headers: { "Content-Type": "text/html; charset=utf-8" }
 		});
-		else res.status(404).type("html").send(String(content));
 	});
-	const httpServer = http.createServer(app);
-	await new Promise((ok, fail) => {
-		const onError = (err) => {
-			httpServer.off("listening", onListening);
-			fail(err);
-		};
-		const onListening = () => {
-			httpServer.off("error", onError);
-			ok();
-		};
-		httpServer.once("error", onError);
-		httpServer.once("listening", onListening);
-		httpServer.listen(port);
-	});
-	const addr = httpServer.address();
-	const actualPort = typeof addr === "object" && addr ? addr.port : port;
-	const url = `http://localhost${actualPort === 80 ? "" : `:${actualPort}`}/`;
-	console.log(chalk.green("The server has been started successfully at:"), chalk.cyan(url), chalk.magenta(`\nFolder for static files:`), chalk.gray(distAbs), chalk.magenta("\nPage \"Error 404\":"), chalk.gray(hasE404 ? errorFilePath : "Used default page, because file \"/404.html\" not found."));
+	const httpServer = serve(app, { port });
+	await httpServer.ready();
+	const serverUrlAdr = httpServer.url ?? `http://localhost:${port}`;
+	console.log(styleText("green", "The server has been started successfully at:"), styleText("cyan", serverUrlAdr), styleText("magenta", "\nFolder for static files:"), styleText("gray", distAbs), styleText("magenta", "\nPage \"Error 404\":"), styleText("gray", errorFilePath ?? "Used default page, because file \"/404.html\" not found."));
 	return httpServer;
 }
 export { server as default };

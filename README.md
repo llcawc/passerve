@@ -1,111 +1,191 @@
 # passerve
 
-> simple static server for local development
+> Simple static server for local development.
+
+`passerve` is a lightweight static file server powered by [H3 v2](https://h3.dev/).
+
+It serves files from a specified directory, supports custom 404 pages, and provides a built-in fallback error page.
+
+## Requirements
+
+- Node.js >= 20.19.0
 
 ## Getting started
 
-Install the `passerve` as global package:
+Install `passerve` globally:
 
 ```bash
 npm install -g passerve
 ```
 
-or install local in project:
+Or install it locally in your project:
 
 ```bash
 npm install --save-dev passerve
 ```
 
-## Commands
+## CLI
 
-Usage for global install:
-
-```bash
-$ passerve [options]
-```
-
-Usage for install in project:
+Usage with a global installation:
 
 ```bash
-$ npx passerve [options]
+passerve [options]
 ```
 
-### Use in `package.json` scripts:
+Usage with a local installation:
+
+```bash
+npx passerve [options]
+```
+
+### Use in `package.json` scripts
 
 ```json
+{
   "scripts": {
-    "serve": "passerve [options]"
+    "serve": "passerve"
   }
+}
 ```
 
-and start this:
+Start the server:
 
 ```bash
-$ npm run serve
+npm run serve
 ```
 
-## Options:
+### Options
 
-```
-  -v, --version       output the current version
-  -p, --port <n>      server port number (default: 3000)
-  -d, --dist [value]  folder for serve files (default: dist)
-  -e, --e404 [value]  filename for page "Error 404" (default: 404.html)
-  -h, --help          display help for command
-```
+| Option               | Description                                         |
+| -------------------- | --------------------------------------------------- |
+| `-v, --version`      | Output the current version                          |
+| `-p, --port <port>`  | Server port number (default: `3000`)                |
+| `-d, --dist <value>` | Directory containing static files (default: `dist`) |
+| `-e, --e404 <value>` | Custom 404 page filename (default: `404.html`)      |
+| `-h, --help`         | Display help for command                            |
 
-## Example call:
+### Examples
 
 ```bash
-$ passerve -p 4200 -d build -e error.html
+passerve -p 4200 -d build -e error.html
 ```
 
-or
+Or:
 
 ```bash
-$ npx passerve --port 8080 --dist './static'
+npx passerve --port 8080 --dist ./static
 ```
 
-If no options are provided, defaults are used. If the 404.html file missing in the dist folder, a built-in error page is shown instead.
+If no options are provided, the default values are used.
 
-> Tip: --port 0 makes the OS pick any free port. The actual port is printed in the startup log.
+The `dist` directory is resolved relative to the current working directory (`process.cwd()`).
 
-## API / Gulp
+### Port selection
 
-You can start the server programmatically. The `server()` function returns a `Promise<http.Server>` that resolves **after** the server is listening and rejects if the port is invalid, already in use, or if `e404` points outside `dist`.
+Use `--port 0` to let the operating system select an available port:
+
+```bash
+passerve --port 0
+```
+
+The actual server URL is printed in the startup log.
+
+## Error 404 page
+
+By default, `passerve` looks for `404.html` inside the static directory.
+
+You can specify a different filename:
+
+```bash
+passerve --dist build --e404 error.html
+```
+
+The custom 404 file must be located inside the `dist` directory.
+
+If the custom 404 file does not exist or cannot be read, `passerve` displays its built-in HTML error page instead.
+
+## API
+
+You can start the server programmatically:
+
+```js
+import server from "passerve";
+
+const appServer = await server({
+  port: 3000, // default: 3000; use 0 for an available port
+  dist: "dist", // default: './dist', resolved from process.cwd()
+  e404: "404.html", // default: '404.html', must be inside dist
+});
+
+console.log(`Server is running at ${appServer.url}`);
+
+// Stop the server when it is no longer needed
+await appServer.close();
+```
+
+### Server options
+
+| Option | Type     | Default                   | Description                                             |
+| ------ | -------- | ------------------------- | ------------------------------------------------------- |
+| `port` | `number` | `3000`                    | Port to listen on. Use `0` to select an available port. |
+| `dist` | `string` | `process.cwd() + '/dist'` | Directory containing static files.                      |
+| `e404` | `string` | `404.html`                | Custom 404 page filename, relative to `dist`.           |
+
+### Return value
+
+`server()` returns a `Promise<ServerInstance>`.
+
+The promise resolves after the server has started listening.
+
+The returned server instance provides:
+
+| Property / method | Description                                               |
+| ----------------- | --------------------------------------------------------- |
+| `url`             | Actual URL of the running server.                         |
+| `ready()`         | Promise that resolves when the server is ready.           |
+| `close()`         | Stops the server and waits for active requests to finish. |
+| `close(true)`     | Stops the server and terminates active connections.       |
+
+The returned instance is provided by `srvx` through H3. It is **not** a Node.js `http.Server`.
+
+### Example: using with Gulp
 
 ```js
 // gulpfile.js
-
-import { src, dest, series, parallel, watch } from "gulp";
+import process from "node:process";
+import { src, dest, parallel, series, watch } from "gulp";
 import server from "passerve";
 
+// shutdownSignal — a single Promise that resolves upon Ctrl+C
+const shutdownSignal = new Promise((resolve) => {
+  process.once("SIGINT", resolve);
+  process.once("SIGTERM", resolve);
+});
+
+// browse() waits for a signal and then shuts down the server via close(true) in order to forcibly terminate active connections.
 async function browse() {
-  const httpServer = await server({
-    port: 3000, // default: 3000; use 0 to get any free port
-    dist: "dist", // default: "dist", resolved from process.cwd()
-    e404: "404.html", // default: "404.html", must be inside `dist`
+  const appServer = await server({
+    port: 3000,
+    dist: "build",
+    e404: "error.html",
   });
 
-  // Log the actual port — useful when `port: 0` was used
-  const { port } = httpServer.address();
-  console.log(`Server is running on http://localhost:${port}/`);
+  console.log(`Server is running at ${appServer.url}`);
 
-  // Optional: stop the server on Ctrl+C / process exit
-  const shutdown = () => httpServer.close(() => process.exit(0));
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-
-  // Keep the task alive until the server closes
-  await new Promise((resolve) => httpServer.once("close", resolve));
+  await shutdownSignal;
+  await appServer.close(true);
 }
 
 function copy() {
-  return src("src/**/*.*").pipe(dest("dist"));
+  return src("app/**/*.*", { encoding: false }).pipe(dest("build"));
 }
 
-function watcher() {
-  watch("src/**/*.*", copy);
+// watcher() also waits for a signal, after which it calls fileWatcher.close()
+async function watcher() {
+  const fileWatcher = watch("app/**/*.*", copy);
+
+  await shutdownSignal;
+  fileWatcher.close();
 }
 
 export const serve = parallel(watcher, browse);
@@ -114,20 +194,37 @@ export const dev = series(copy, serve);
 
 ## Closing the server
 
-`server.close()` follows Node.js semantics: it stops accepting new connections and waits for the existing ones to finish.
+Use `await appServer.close()` to stop accepting new connections and wait for active requests to finish.
 
 ```js
 import server from "passerve";
 
-const httpServer = await server({ port: 0, dist: "dist" });
+const appServer = await server({
+  port: 0,
+  dist: "build",
+});
 
-// ... run tests against httpServer.address().port ...
+try {
+  console.log(`Server URL: ${appServer.url}`);
 
-await new Promise((resolve, reject) => httpServer.close((err) => (err ? reject(err) : resolve())));
+  // Run tests against the server...
+} finally {
+  await appServer.close();
+}
 ```
+
+## Features
+
+- Lightweight static file server powered by H3 v2.
+- Custom static directory.
+- Custom 404 page with a built-in HTML fallback.
+- Automatic port selection with `port: 0`.
+- CORS headers enabled.
+- Support for `GET` and `HEAD` static requests.
+- Graceful server shutdown.
 
 ---
 
 ## License
 
-MIT ©2026 pasmurno by [llcawc](https://github.com/llcawc). Made with <span style="color: red;">❤</span> to beautiful architecture
+MIT © 2026 pasmurno by [llcawc](https://github.com/llcawc/passerve). Made with ❤️ for beautiful architecture.

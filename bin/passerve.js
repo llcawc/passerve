@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 import process, { cwd } from "node:process";
-import chalk from "chalk";
+import { styleText } from "node:util";
 import { Command, InvalidArgumentError } from "commander";
 import fs from "node:fs/promises";
-import http from "node:http";
-import { join, resolve, sep } from "node:path";
-import express from "express";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { H3, HTTPError, serve, serveStatic } from "h3";
 // package.json
-var version = "1.2.0";
+var version = "1.3.0";
 // src/error.ts
 const content = `<!DOCTYPE html>
 <html lang="en">
@@ -65,73 +64,71 @@ const content = `<!DOCTYPE html>
 </html>
 `;
 // src/server.ts
-const base = cwd();
-const PORT_MIN = 0;
-const PORT_MAX = 65535;
-const STATIC_SERVER_NAME = "passerve";
 const DEFAULTS = {
 	port: 3e3,
-	dist: join(base, "dist"),
+	dist: join(cwd(), "dist"),
 	e404: "404.html"
 };
+const STATIC_SERVER_NAME = "passerve";
 function isValidPort(port) {
-	return Number.isInteger(port) && port >= PORT_MIN && port <= PORT_MAX;
+	return Number.isInteger(port) && port >= 0 && port <= 65535;
 }
-/**
-* Creating a static file server
-* @param args - Optional parameters: server port, source file folder and file name for error 404
-* @type type Args = { port: number; dist: string; e404: string }
-* @returns The HTTP server instance; the promise resolves once the server is listening
-*/
+function isInside(root, path) {
+	const rel = relative(root, path);
+	return rel === "" || rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
 async function server(args = {}) {
 	const port = args.port ?? DEFAULTS.port;
 	const distAbs = resolve(args.dist ?? DEFAULTS.dist);
-	const e404Name = args.e404 ?? DEFAULTS.e404;
+	const e404Path = resolve(distAbs, args.e404 ?? DEFAULTS.e404);
 	if (!isValidPort(port)) throw new RangeError(`Invalid port ${port}: expected an integer from 0 to 65535.`);
-	let errorFilePath = resolve(distAbs, e404Name);
-	if (!errorFilePath.startsWith(distAbs + sep)) throw new Error("Custom \"Error 404\" file must be inside dist folder");
-	let hasE404 = false;
-	try {
-		hasE404 = (await fs.stat(errorFilePath)).isFile();
-	} catch {
-		errorFilePath = null;
-	}
-	const app = express();
-	app.use((_req, res, next) => {
-		res.header("Access-Control-Allow-Origin", "*");
-		res.header("Access-Control-Expose-Headers", "Content-Length");
-		res.header("Access-Control-Allow-Headers", "range");
-		res.header("X-Served-Static-By", STATIC_SERVER_NAME);
-		next();
+	if (!isInside(distAbs, e404Path)) throw new Error("Custom \"Error 404\" file must be inside dist folder");
+	const errorFilePath = await fs.stat(e404Path).then((stat) => stat.isFile() ? e404Path : null).catch(() => null);
+	const app = new H3();
+	app.use((event, next) => {
+		event.res.headers.set("Access-Control-Allow-Origin", "*");
+		event.res.headers.set("Access-Control-Expose-Headers", "Content-Length");
+		event.res.headers.set("Access-Control-Allow-Headers", "range");
+		event.res.headers.set("X-Served-Static-By", STATIC_SERVER_NAME);
+		return next();
 	});
-	app.use(express.static(distAbs));
-	app.use((_req, res) => {
-		if (hasE404 && errorFilePath) res.status(404).sendFile(errorFilePath, (err) => {
-			if (err) {
-				console.error("404 file error:", err);
-				res.status(500).send("Error loading 404 page");
-			}
+	app.all("/**", async (event) => {
+		try {
+			const response = await serveStatic(event, {
+				indexNames: ["/index.html"],
+				getContents: (id) => {
+					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
+					if (!isInside(distAbs, path)) return;
+					return fs.readFile(path).catch(() => void 0);
+				},
+				getMeta: async (id) => {
+					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
+					if (!isInside(distAbs, path)) return;
+					const stat = await fs.stat(path).catch(() => null);
+					if (!stat?.isFile()) return;
+					return {
+						size: stat.size,
+						mtime: stat.mtimeMs
+					};
+				}
+			});
+			if (response) return response;
+		} catch (error) {
+			if (!HTTPError.isError(error) || error.status !== 404) throw error;
+		}
+		let body = String(content);
+		if (errorFilePath) try {
+			body = await fs.readFile(errorFilePath, "utf8");
+		} catch {}
+		return new Response(event.req.method === "HEAD" ? null : body, {
+			status: 404,
+			headers: { "Content-Type": "text/html; charset=utf-8" }
 		});
-		else res.status(404).type("html").send(String(content));
 	});
-	const httpServer = http.createServer(app);
-	await new Promise((ok, fail) => {
-		const onError = (err) => {
-			httpServer.off("listening", onListening);
-			fail(err);
-		};
-		const onListening = () => {
-			httpServer.off("error", onError);
-			ok();
-		};
-		httpServer.once("error", onError);
-		httpServer.once("listening", onListening);
-		httpServer.listen(port);
-	});
-	const addr = httpServer.address();
-	const actualPort = typeof addr === "object" && addr ? addr.port : port;
-	const url = `http://localhost${actualPort === 80 ? "" : `:${actualPort}`}/`;
-	console.log(chalk.green("The server has been started successfully at:"), chalk.cyan(url), chalk.magenta(`\nFolder for static files:`), chalk.gray(distAbs), chalk.magenta("\nPage \"Error 404\":"), chalk.gray(hasE404 ? errorFilePath : "Used default page, because file \"/404.html\" not found."));
+	const httpServer = serve(app, { port });
+	await httpServer.ready();
+	const serverUrlAdr = httpServer.url ?? `http://localhost:${port}`;
+	console.log(styleText("green", "The server has been started successfully at:"), styleText("cyan", serverUrlAdr), styleText("magenta", "\nFolder for static files:"), styleText("gray", distAbs), styleText("magenta", "\nPage \"Error 404\":"), styleText("gray", errorFilePath ?? "Used default page, because file \"/404.html\" not found."));
 	return httpServer;
 }
 // src/passerve.ts
@@ -142,31 +139,46 @@ function parsePort(value) {
 	if (!Number.isInteger(port) || port < 0 || port > 65535) throw new InvalidArgumentError(`invalid port "${value}", expected an integer from 0 to 65535`);
 	return port;
 }
+function getErrorCode(error) {
+	if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
+}
 program.version(ver, "-v, --version", "output the current version");
 program.option("-p, --port <port>", "server port number (default: 3000)", parsePort).option("-d, --dist <value>", "folder for serve files (default: dist)").option("-e, --e404 <value>", "filename for page \"Error 404\" (default: 404.html)");
 const header = `
-${chalk.magenta(`• passerve • ::.. version: ${ver}`) + chalk.gray("\nSimple static server for local development by pasmurno from llcawc\n")}`;
+${styleText("magenta", `• passerve • ::.. version: ${ver}`) + styleText("gray", "\nSimple static server for local development by pasmurno from llcawc\n")}`;
 program.addHelpText("before", header);
 const example = `
-${chalk.magenta("Example call:\n") + chalk.cyan("   $ passerve\n") + chalk.cyan("   $ passerve -p 4200 -d build -e error.html\n") + chalk.cyan("   $ npx passerve --port 8080 --dist './static'") + chalk.green("  // local use")}`;
+${styleText("magenta", "Example call:\n") + styleText("cyan", "   $ passerve\n") + styleText("cyan", "   $ passerve -p 4200 -d build -e error.html\n") + styleText("cyan", "   $ npx passerve --port 8080 --dist './static'") + styleText("green", "  // local use")}`;
 program.addHelpText("after", example);
 const footer = `
-${chalk.gray("Сopyright ©2026 llcawc, MIT License. Made with ") + chalk.red("❤") + chalk.gray("  to beautiful architecture. \nSource: https://github.com/llcawc/passerve")}
+${styleText("gray", "Сopyright ©2026 llcawc, MIT License. Made with ") + styleText("red", "❤") + styleText("gray", "  to beautiful architecture. \nSource: https://github.com/llcawc/passerve")}
 `;
 program.addHelpText("afterAll", footer);
 program.parse(process.argv);
 const options = program.opts();
 server(options).then((appServe) => {
-	const shutdown = (signal) => {
-		console.log(`\n${chalk.yellow(`Received ${signal}. Shutting down...`)}`);
-		appServe.close(() => process.exit(0));
+	let shuttingDown = false;
+	const shutdown = async (signal) => {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		console.log(`\n${styleText("yellow", `Received ${signal}. Shutting down...`)}`);
+		try {
+			await appServe.close();
+		} catch (error) {
+			console.error(styleText("red", "Failed to stop the server:"), error);
+			process.exitCode = 1;
+		}
 	};
-	process.once("SIGINT", () => shutdown("SIGINT"));
-	process.once("SIGTERM", () => shutdown("SIGTERM"));
+	process.once("SIGINT", () => {
+		shutdown("SIGINT");
+	});
+	process.once("SIGTERM", () => {
+		shutdown("SIGTERM");
+	});
 }).catch((error) => {
-	if (error?.code === "EADDRINUSE") console.error(chalk.red(`Cannot start the server: port ${options.port ?? 3e3} is already in use.`));
-	else if (error instanceof RangeError) console.error(chalk.red(error.message));
-	else console.error(chalk.red("Failed to start the server:"), error);
-	process.exit(1);
+	if (getErrorCode(error) === "EADDRINUSE") console.error(styleText("red", `Cannot start the server: port ${options.port ?? 3e3} is already in use.`));
+	else if (error instanceof RangeError) console.error(styleText("red", error.message));
+	else console.error(styleText("red", "Failed to start the server:"), error);
+	process.exitCode = 1;
 });
 export {};
