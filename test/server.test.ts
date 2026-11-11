@@ -58,9 +58,34 @@ describe('server', () => {
     const response = await fetch(getUrl(runningServer, '/'))
 
     expect(response.headers.get('access-control-allow-origin')).toBe('*')
+    expect(response.headers.get('access-control-allow-headers')).toBe('range, content-type')
+    expect(response.headers.get('access-control-allow-methods')).toBe('GET, HEAD, OPTIONS')
     expect(response.headers.get('access-control-expose-headers')).toBe('Content-Length')
-    expect(response.headers.get('access-control-allow-headers')).toBe('range')
+    expect(response.headers.get('access-control-max-age')).toBe('600')
+    expect(response.headers.get('cache-control')).toBe('no-cache')
     expect(response.headers.get('x-served-static-by')).toBe('passerve')
+  })
+
+  it('answers a CORS preflight OPTIONS request with 204 and CORS headers', async () => {
+    const runningServer = await startServer()
+    const response = await fetch(getUrl(runningServer, '/'), {
+      method: 'OPTIONS',
+      headers: { 'Access-Control-Request-Method': 'GET' },
+    })
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+    expect(response.headers.get('access-control-allow-methods')).toBe('GET, HEAD, OPTIONS')
+  })
+
+  it('keeps CORS headers on 404 error responses', async () => {
+    const runningServer = await startServer()
+    const response = await fetch(getUrl(runningServer, '/missing'))
+
+    expect(response.status).toBe(404)
+    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+    expect(response.headers.get('access-control-allow-headers')).toBe('range, content-type')
+    expect(response.headers.get('access-control-allow-methods')).toBe('GET, HEAD, OPTIONS')
   })
 
   it('returns the built-in HTML page for missing files by default', async () => {

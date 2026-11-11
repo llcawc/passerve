@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import process, { cwd } from "node:process";
+import process from "node:process";
 import { styleText } from "node:util";
 import { Command, InvalidArgumentError } from "commander";
 import fs from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { H3, HTTPError, serve, serveStatic } from "h3";
 // package.json
-var version = "1.3.0";
+var version = "1.3.1";
 // src/error.ts
 const content = `<!DOCTYPE html>
 <html lang="en">
@@ -66,8 +66,16 @@ const content = `<!DOCTYPE html>
 // src/server.ts
 const DEFAULTS = {
 	port: 3e3,
-	dist: join(cwd(), "dist"),
+	dist: "dist",
 	e404: "404.html"
+};
+const CORS_HEADERS = {
+	"Access-Control-Allow-Origin": "*",
+	"Access-Control-Allow-Headers": "range, content-type",
+	"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+	"Access-Control-Expose-Headers": "Content-Length",
+	"Access-Control-Max-Age": "600",
+	"Cache-Control": "no-cache"
 };
 const STATIC_SERVER_NAME = "passerve";
 function isValidPort(port) {
@@ -83,13 +91,16 @@ async function server(args = {}) {
 	const e404Path = resolve(distAbs, args.e404 ?? DEFAULTS.e404);
 	if (!isValidPort(port)) throw new RangeError(`Invalid port ${port}: expected an integer from 0 to 65535.`);
 	if (!isInside(distAbs, e404Path)) throw new Error("Custom \"Error 404\" file must be inside dist folder");
-	const errorFilePath = await fs.stat(e404Path).then((stat) => stat.isFile() ? e404Path : null).catch(() => null);
+	const errorFilePath = (await fs.stat(e404Path).catch(() => null))?.isFile() ? e404Path : null;
+	if (args.e404 && !errorFilePath) console.warn(styleText("yellow", `Warning:`), `Custom 404 file "${args.e404}" not found or is not a file. Using default.`);
 	const app = new H3();
-	app.use((event, next) => {
-		event.res.headers.set("Access-Control-Allow-Origin", "*");
-		event.res.headers.set("Access-Control-Expose-Headers", "Content-Length");
-		event.res.headers.set("Access-Control-Allow-Headers", "range");
+	app.use(async (event, next) => {
+		for (const [k, v] of Object.entries(CORS_HEADERS)) {
+			event.res.headers.set(k, v);
+			event.res.errHeaders?.set(k, v);
+		}
 		event.res.headers.set("X-Served-Static-By", STATIC_SERVER_NAME);
+		if (event.req.method === "OPTIONS" && event.req.headers.has("Access-Control-Request-Method")) return new Response(null, { status: 204 });
 		return next();
 	});
 	app.all("/**", async (event) => {
@@ -99,7 +110,10 @@ async function server(args = {}) {
 				getContents: (id) => {
 					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
 					if (!isInside(distAbs, path)) return;
-					return fs.readFile(path).catch(() => void 0);
+					return fs.readFile(path).catch((err) => {
+						if (err?.code === "ENOENT") return;
+						throw err;
+					});
 				},
 				getMeta: async (id) => {
 					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
@@ -151,7 +165,7 @@ const example = `
 ${styleText("magenta", "Example call:\n") + styleText("cyan", "   $ passerve\n") + styleText("cyan", "   $ passerve -p 4200 -d build -e error.html\n") + styleText("cyan", "   $ npx passerve --port 8080 --dist './static'") + styleText("green", "  // local use")}`;
 program.addHelpText("after", example);
 const footer = `
-${styleText("gray", "Сopyright ©2026 llcawc, MIT License. Made with ") + styleText("red", "❤") + styleText("gray", "  to beautiful architecture. \nSource: https://github.com/llcawc/passerve")}
+${styleText("gray", "Copyright ©2026 llcawc, MIT License. Made with ") + styleText("red", "❤") + styleText("gray", "  to beautiful architecture. \nSource: https://github.com/llcawc/passerve")}
 `;
 program.addHelpText("afterAll", footer);
 program.parse(process.argv);
@@ -164,9 +178,12 @@ server(options).then((appServe) => {
 		console.log(`\n${styleText("yellow", `Received ${signal}. Shutting down...`)}`);
 		try {
 			await appServe.close();
+			console.log(styleText("green", "Server stopped successfully."));
+			process.exit(0);
 		} catch (error) {
 			console.error(styleText("red", "Failed to stop the server:"), error);
 			process.exitCode = 1;
+			process.exit(1);
 		}
 	};
 	process.once("SIGINT", () => {

@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { cwd } from 'node:process'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { styleText } from 'node:util'
 
 import { H3, HTTPError, serve, serveStatic } from 'h3'
@@ -17,8 +16,17 @@ type ServerInstance = ReturnType<typeof serve>
 
 const DEFAULTS: Args = {
   port: 3000,
-  dist: join(cwd(), 'dist'),
+  dist: 'dist',
   e404: '404.html',
+}
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'range, content-type',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+  'Access-Control-Expose-Headers': 'Content-Length',
+  'Access-Control-Max-Age': '600',
+  'Cache-Control': 'no-cache',
 }
 
 const STATIC_SERVER_NAME = 'passerve'
@@ -46,69 +54,35 @@ async function server(args: Partial<Args> = {}): Promise<ServerInstance> {
     throw new Error('Custom "Error 404" file must be inside dist folder')
   }
 
-  const errorFilePath = await fs
-    .stat(e404Path)
-    .then((stat) => (stat.isFile() ? e404Path : null))
-    .catch(() => null)
+  const errorStat = await fs.stat(e404Path).catch(() => null)
+  const errorFilePath = errorStat?.isFile() ? e404Path : null
+
+  if (args.e404 && !errorFilePath) {
+    console.warn(
+      styleText('yellow', `Warning:`),
+      `Custom 404 file "${args.e404}" not found or is not a file. Using default.`,
+    )
+  }
 
   const app = new H3()
 
-  app.use((event, next) => {
-    event.res.headers.set('Access-Control-Allow-Origin', '*')
-    event.res.headers.set('Access-Control-Expose-Headers', 'Content-Length')
-    event.res.headers.set('Access-Control-Allow-Headers', 'range')
+  app.use(async (event, next) => {
+    // Заголовки обычных ответов
+    for (const [k, v] of Object.entries(CORS_HEADERS)) {
+      event.res.headers.set(k, v)
+      // чтобы CORS не «пропадал» в ошибках (404, 500 и т.д.)
+      event.res.errHeaders?.set(k, v)
+    }
+
     event.res.headers.set('X-Served-Static-By', STATIC_SERVER_NAME)
+
+    // Отвечаем на preflight, но не глушим легитимные OPTIONS-маршруты
+    if (event.req.method === 'OPTIONS' && event.req.headers.has('Access-Control-Request-Method')) {
+      return new Response(null, { status: 204 })
+    }
 
     return next()
   })
-
-  // app.all('/**', async (event) => {
-  //   const response = await serveStatic(event, {
-  //     indexNames: ['/index.html'],
-
-  //     getContents: (id) => {
-  //       const path = resolve(distAbs, `.${id.startsWith('/') ? id : `/${id}`}`)
-
-  //       if (!isInside(distAbs, path)) {
-  //         return undefined
-  //       }
-
-  //       return fs.readFile(path).catch(() => undefined)
-  //     },
-
-  //     getMeta: async (id) => {
-  //       const path = resolve(distAbs, `.${id.startsWith('/') ? id : `/${id}`}`)
-
-  //       if (!isInside(distAbs, path)) {
-  //         return undefined
-  //       }
-
-  //       const stat = await fs.stat(path).catch(() => null)
-
-  //       if (!stat?.isFile()) {
-  //         return undefined
-  //       }
-
-  //       return {
-  //         size: stat.size,
-  //         mtime: stat.mtimeMs,
-  //       }
-  //     },
-  //   })
-
-  //   if (response) {
-  //     return response
-  //   }
-
-  //   const body = errorFilePath ? await fs.readFile(errorFilePath).catch(() => String(content)) : String(content)
-
-  //   return new Response(event.req.method === 'HEAD' ? null : body, {
-  //     status: 404,
-  //     headers: {
-  //       'Content-Type': 'text/html; charset=utf-8',
-  //     },
-  //   })
-  // })
 
   app.all('/**', async (event) => {
     try {
@@ -122,7 +96,13 @@ async function server(args: Partial<Args> = {}): Promise<ServerInstance> {
             return undefined
           }
 
-          return fs.readFile(path).catch(() => undefined)
+          // return fs.readFile(path).catch(() => undefined)
+          return fs.readFile(path).catch((err: NodeJS.ErrnoException) => {
+            if (err?.code === 'ENOENT') {
+              return undefined
+            }
+            throw err
+          })
         },
 
         getMeta: async (id) => {

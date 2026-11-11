@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { cwd } from "node:process";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { styleText } from "node:util";
 import { H3, HTTPError, serve, serveStatic } from "h3";
 // src/error.ts
@@ -62,8 +61,16 @@ const content = `<!DOCTYPE html>
 // src/server.ts
 const DEFAULTS = {
 	port: 3e3,
-	dist: join(cwd(), "dist"),
+	dist: "dist",
 	e404: "404.html"
+};
+const CORS_HEADERS = {
+	"Access-Control-Allow-Origin": "*",
+	"Access-Control-Allow-Headers": "range, content-type",
+	"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+	"Access-Control-Expose-Headers": "Content-Length",
+	"Access-Control-Max-Age": "600",
+	"Cache-Control": "no-cache"
 };
 const STATIC_SERVER_NAME = "passerve";
 function isValidPort(port) {
@@ -79,13 +86,16 @@ async function server(args = {}) {
 	const e404Path = resolve(distAbs, args.e404 ?? DEFAULTS.e404);
 	if (!isValidPort(port)) throw new RangeError(`Invalid port ${port}: expected an integer from 0 to 65535.`);
 	if (!isInside(distAbs, e404Path)) throw new Error("Custom \"Error 404\" file must be inside dist folder");
-	const errorFilePath = await fs.stat(e404Path).then((stat) => stat.isFile() ? e404Path : null).catch(() => null);
+	const errorFilePath = (await fs.stat(e404Path).catch(() => null))?.isFile() ? e404Path : null;
+	if (args.e404 && !errorFilePath) console.warn(styleText("yellow", `Warning:`), `Custom 404 file "${args.e404}" not found or is not a file. Using default.`);
 	const app = new H3();
-	app.use((event, next) => {
-		event.res.headers.set("Access-Control-Allow-Origin", "*");
-		event.res.headers.set("Access-Control-Expose-Headers", "Content-Length");
-		event.res.headers.set("Access-Control-Allow-Headers", "range");
+	app.use(async (event, next) => {
+		for (const [k, v] of Object.entries(CORS_HEADERS)) {
+			event.res.headers.set(k, v);
+			event.res.errHeaders?.set(k, v);
+		}
 		event.res.headers.set("X-Served-Static-By", STATIC_SERVER_NAME);
+		if (event.req.method === "OPTIONS" && event.req.headers.has("Access-Control-Request-Method")) return new Response(null, { status: 204 });
 		return next();
 	});
 	app.all("/**", async (event) => {
@@ -95,7 +105,10 @@ async function server(args = {}) {
 				getContents: (id) => {
 					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);
 					if (!isInside(distAbs, path)) return;
-					return fs.readFile(path).catch(() => void 0);
+					return fs.readFile(path).catch((err) => {
+						if (err?.code === "ENOENT") return;
+						throw err;
+					});
 				},
 				getMeta: async (id) => {
 					const path = resolve(distAbs, `.${id.startsWith("/") ? id : `/${id}`}`);

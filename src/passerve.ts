@@ -54,7 +54,7 @@ program.addHelpText('after', example)
 
 const footer = `
 ${
-  styleText('gray', 'Сopyright ©2026 llcawc, MIT License. Made with ') +
+  styleText('gray', 'Copyright ©2026 llcawc, MIT License. Made with ') +
   styleText('red', '❤') +
   styleText('gray', '  to beautiful architecture. \nSource: https://github.com/llcawc/passerve')
 }
@@ -81,9 +81,12 @@ server(options)
 
       try {
         await appServe.close()
+        console.log(styleText('green', 'Server stopped successfully.'))
+        process.exit(0)
       } catch (error) {
         console.error(styleText('red', 'Failed to stop the server:'), error)
         process.exitCode = 1
+        process.exit(1)
       }
     }
 
